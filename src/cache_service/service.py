@@ -4,7 +4,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Protocol
 
-from cache_service.caching import CachingTransformer
+from cache_service.caching import TransformationCache
 
 OUTPUT_SEPARATOR = ", "
 
@@ -33,8 +33,8 @@ def render_output(first: Sequence[str], second: Sequence[str]) -> str:
 class PayloadService:
     """Builds payloads from transformed strings and stores them by content."""
 
-    def __init__(self, transformer: CachingTransformer, payloads: PayloadStore) -> None:
-        self._transformer = transformer
+    def __init__(self, cache: TransformationCache, payloads: PayloadStore) -> None:
+        self._cache = cache
         self._payloads = payloads
 
     async def create_payload(
@@ -46,7 +46,7 @@ class PayloadService:
         already generated payload gets the existing id back.
         """
         # A set, so a string repeated within the request is transformed once.
-        transformed = await self._transformer.transform_many({*list_1, *list_2})
+        transformed = await self._cache.transform_many({*list_1, *list_2})
         output = render_output(
             [transformed[source] for source in list_1],
             [transformed[source] for source in list_2],

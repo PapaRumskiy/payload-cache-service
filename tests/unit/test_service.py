@@ -2,7 +2,7 @@ import uuid
 
 import pytest
 
-from cache_service.caching import CachingTransformer
+from cache_service.caching import TransformationCache
 from cache_service.service import PayloadService
 from tests.fakes import (
     CountingTransformer,
@@ -21,10 +21,10 @@ def transformer() -> CountingTransformer:
 
 @pytest.fixture
 def service(transformer: CountingTransformer) -> PayloadService:
-    caching_transformer = CachingTransformer(
+    transformation_cache = TransformationCache(
         transformer, InMemoryTransformationStore(), timeout=1, max_concurrency=10
     )
-    return PayloadService(caching_transformer, InMemoryPayloads())
+    return PayloadService(transformation_cache, InMemoryPayloads())
 
 
 async def test_builds_the_spec_example(service: PayloadService) -> None:

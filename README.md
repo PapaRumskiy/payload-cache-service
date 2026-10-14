@@ -119,7 +119,7 @@ What happens on `POST /payload`:
 1. FastAPI validates the body against `PayloadCreate` (`schemas.py`).
 2. `PayloadService` (`service.py`) collects the distinct strings of both lists.
    A string that occurs several times in one request is transformed once.
-3. `CachingTransformer` (`caching.py`) looks all of them up in one query and
+3. `TransformationCache` (`caching.py`) looks all of them up in one query and
    calls the transformer, concurrently, only for the misses. Each result is
    stored as soon as it arrives.
 4. The transformed strings are interleaved and joined with `", "`.
@@ -137,7 +137,7 @@ the SHA-256 of the input, which keeps the index small for long strings
 distinct strings are looked up and transformed.
 
 Concurrent requests need more care, because two of them can miss the cache for
-the same string at the same moment. In `CachingTransformer`, a miss is resolved
+the same string at the same moment. In `TransformationCache`, a miss is resolved
 by a single task that checks the cache once more, calls the transformer and
 stores the result. Every request that misses the same string while that task
 runs waits for it instead of calling the transformer again. The task is only
@@ -237,7 +237,7 @@ tests/integration/  real database and HTTP: repositories, API, migrations, CLI a
 
 ## Tests
 
-Unit tests run without I/O. `CachingTransformer` and the service are tested
+Unit tests run without I/O. `TransformationCache` and the service are tested
 with an in-memory store and a transformer that counts its calls, which is how
 the "minimize calls" requirement is checked directly. The concurrency tests
 control exactly when fake calls and writes finish, so they do not depend on

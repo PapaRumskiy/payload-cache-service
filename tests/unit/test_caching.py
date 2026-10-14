@@ -3,7 +3,7 @@ from collections.abc import Callable, Collection
 
 import pytest
 
-from cache_service.caching import CachingTransformer
+from cache_service.caching import TransformationCache
 from cache_service.transformer import Transformer, TransformerError
 from tests.fakes import CountingTransformer, InMemoryTransformationStore
 
@@ -72,8 +72,8 @@ def caching(
     *,
     timeout: float = 1.0,
     max_concurrency: int = 10,
-) -> CachingTransformer:
-    return CachingTransformer(
+) -> TransformationCache:
+    return TransformationCache(
         transformer,
         store if store is not None else InMemoryTransformationStore(),
         timeout=timeout,

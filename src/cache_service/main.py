@@ -9,7 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from cache_service.api import router, validation_error_handler
-from cache_service.caching import CachingTransformer
+from cache_service.caching import TransformationCache
 from cache_service.config import Settings, get_settings
 from cache_service.repositories import PayloadRepository, TransformationRepository
 from cache_service.service import PayloadService
@@ -38,7 +38,7 @@ def create_app(
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         # One instance for the whole app: concurrent requests share its
         # in-flight transformer calls.
-        caching_transformer = CachingTransformer(
+        transformation_cache = TransformationCache(
             transformer or SimulatedTransformer(settings.transformer_latency),
             TransformationRepository(sessions),
             timeout=settings.transformer_timeout,
@@ -46,12 +46,12 @@ def create_app(
         )
         app.state.sessions = sessions
         app.state.payload_service = PayloadService(
-            caching_transformer, PayloadRepository(sessions)
+            transformation_cache, PayloadRepository(sessions)
         )
         try:
             yield
         finally:
-            await caching_transformer.drain()
+            await transformation_cache.drain()
             await engine.dispose()
 
     app = FastAPI(

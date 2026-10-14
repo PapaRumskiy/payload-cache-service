@@ -16,8 +16,10 @@ class TransformationStore(Protocol):
     async def save(self, source: str, result: str) -> None: ...
 
 
-class CachingTransformer:
-    """Calls the transformer only for strings that are not cached yet.
+class TransformationCache:
+    """Read-through cache in front of the transformer.
+
+    The transformer is called only for strings that are not cached yet.
 
     A cache miss is resolved by one task that checks the cache again, calls the
     transformer and stores the result. Concurrent requests that miss the same
