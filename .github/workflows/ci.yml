@@ -30,10 +30,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        database: [sqlite, postgres]
+        include:
+          # An empty URL makes the tests use a temporary SQLite file, and an
+          # empty image skips the Postgres container.
+          - database: sqlite
+            postgres-image: ""
+            database-url: ""
+          - database: postgres
+            postgres-image: postgres:18-alpine
+            database-url: postgresql+asyncpg://cache:cache@localhost:5432/cache_test
     services:
       postgres:
-        image: postgres:18-alpine
+        image: ${{ matrix.postgres-image }}
         env:
           POSTGRES_USER: cache
           POSTGRES_PASSWORD: cache
@@ -46,8 +54,7 @@ jobs:
           --health-timeout 3s
           --health-retries 15
     env:
-      # Empty for the SQLite run, which makes the tests use a temporary file.
-      TEST_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgresql+asyncpg://cache:cache@localhost:5432/cache_test' || '' }}
+      TEST_DATABASE_URL: ${{ matrix.database-url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
