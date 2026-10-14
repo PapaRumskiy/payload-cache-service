@@ -120,6 +120,9 @@ async def test_call_is_shared_until_its_result_is_stored() -> None:
 
     first = asyncio.create_task(cached.transform_many({"a"}))
     await store.wait_for(lambda: store.saving)
+    # Checked directly: the second request's re-check of the cache could hide
+    # a call that was released too early.
+    assert "a" in cached._in_flight
     second = asyncio.create_task(cached.transform_many({"a"}))
     await store.wait_for(lambda: store.lookups == 3)
     store.release.set()
