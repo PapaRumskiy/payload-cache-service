@@ -1,5 +1,6 @@
 """In-memory stand-ins for the transformer service and the database."""
 
+import asyncio
 import uuid
 from collections import Counter
 from collections.abc import Collection, Mapping
@@ -8,11 +9,13 @@ from collections.abc import Collection, Mapping
 class CountingTransformer:
     """Uppercases like the simulated service and records every call."""
 
-    def __init__(self) -> None:
+    def __init__(self, latency: float = 0) -> None:
         self.calls: Counter[str] = Counter()
+        self._latency = latency
 
     async def __call__(self, value: str, /) -> str:
         self.calls[value] += 1
+        await asyncio.sleep(self._latency)
         return value.upper()
 
     @property
