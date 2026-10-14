@@ -1,8 +1,9 @@
 """Service configuration, read from ``CACHE_SERVICE_*`` environment variables."""
 
 from functools import lru_cache
+from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,7 +13,7 @@ class Settings(BaseSettings):
     )
 
     database_url: str = "sqlite+aiosqlite:///./cache.db"
-    log_level: str = "INFO"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     # The transformer stands in for a remote service, so it gets the knobs a
     # real client needs: a timeout and a cap on parallel calls. The latency only
@@ -20,6 +21,11 @@ class Settings(BaseSettings):
     transformer_latency: float = Field(default=0.1, ge=0)
     transformer_timeout: float = Field(default=5.0, gt=0)
     transformer_max_concurrency: int = Field(default=10, gt=0)
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _uppercase_log_level(cls, value: object) -> object:
+        return value.upper() if isinstance(value, str) else value
 
 
 @lru_cache
