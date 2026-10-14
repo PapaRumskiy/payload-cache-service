@@ -5,17 +5,25 @@ import uuid
 from collections import Counter
 from collections.abc import Collection, Mapping
 
+from cache_service.transformer import TransformerError
+
 
 class CountingTransformer:
-    """Uppercases like the simulated service and records every call."""
+    """Uppercases like the simulated service and records every call.
 
-    def __init__(self, latency: float = 0) -> None:
+    Values listed in ``fail_on`` make the call fail, like an outage would.
+    """
+
+    def __init__(self, latency: float = 0, fail_on: Collection[str] = ()) -> None:
         self.calls: Counter[str] = Counter()
+        self.fail_on = set(fail_on)
         self._latency = latency
 
     async def __call__(self, value: str, /) -> str:
         self.calls[value] += 1
         await asyncio.sleep(self._latency)
+        if value in self.fail_on:
+            raise TransformerError(f"cannot transform {value!r}")
         return value.upper()
 
     @property

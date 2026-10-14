@@ -10,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from cache_service.repositories import PayloadRepository, TransformationCache
 from cache_service.schemas import PayloadCreate, PayloadCreated, PayloadRead
 from cache_service.service import PayloadService
+from cache_service.transformer import TransformerError
 
 router = APIRouter()
 
@@ -34,6 +35,9 @@ PayloadServiceDep = Annotated[PayloadService, Depends(get_payload_service)]
             "model": PayloadCreated,
             "description": "The same payload was generated before; its id is reused.",
         },
+        status.HTTP_502_BAD_GATEWAY: {
+            "description": "The transformer service failed; retrying is safe.",
+        },
     },
 )
 async def create_payload(
@@ -43,7 +47,12 @@ async def create_payload(
     service: PayloadServiceDep,
 ) -> PayloadCreated:
     """Generate a payload from two lists and return its id."""
-    payload_id, created = await service.create_payload(body.list_1, body.list_2)
+    try:
+        payload_id, created = await service.create_payload(body.list_1, body.list_2)
+    except TransformerError as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, detail="Transformer service failed"
+        ) from exc
     response.headers["Location"] = str(
         request.url_for("read_payload", payload_id=str(payload_id))
     )

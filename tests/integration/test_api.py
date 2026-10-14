@@ -192,3 +192,19 @@ async def test_health_reports_unreachable_database(tmp_path: Path) -> None:
         response = await client.get("/health")
 
     assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+
+
+async def test_transformer_failure_is_a_bad_gateway_and_retry_is_cheap(
+    client: httpx.AsyncClient, transformer: CountingTransformer
+) -> None:
+    transformer.fail_on.add("b")
+    body = {"list_1": ["a", "b"], "list_2": ["c", "d"]}
+
+    failed = await client.post("/payload", json=body)
+    transformer.fail_on.clear()
+    retried = await client.post("/payload", json=body)
+
+    assert failed.status_code == status.HTTP_502_BAD_GATEWAY
+    assert failed.json() == {"detail": "Transformer service failed"}
+    assert retried.status_code == status.HTTP_201_CREATED
+    assert transformer.calls == {"a": 1, "b": 2, "c": 1, "d": 1}

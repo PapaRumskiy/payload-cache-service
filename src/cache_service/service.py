@@ -89,8 +89,27 @@ class PayloadService:
         return cached | fresh
 
     async def _call_transformer(self, sources: Sequence[str]) -> dict[str, str]:
-        """Transform cache misses concurrently and cache the results."""
-        results = await asyncio.gather(*map(self._transformer, sources))
-        fresh = dict(zip(sources, results, strict=True))
+        """Transform cache misses concurrently and cache the results.
+
+        Results of the calls that succeeded are cached even if others failed:
+        they are already paid for, and a retry only repeats the failed calls.
+
+        Raises:
+            TransformerError: if any call failed.
+        """
+        outcomes = await asyncio.gather(
+            *map(self._transformer, sources), return_exceptions=True
+        )
+        fresh = {
+            source: outcome
+            for source, outcome in zip(sources, outcomes, strict=True)
+            if isinstance(outcome, str)
+        }
         await self._cache.save_many(fresh)
+        errors = [outcome for outcome in outcomes if isinstance(outcome, BaseException)]
+        if errors:
+            logger.warning(
+                "%d of %d transformer calls failed", len(errors), len(sources)
+            )
+            raise errors[0]
         return fresh

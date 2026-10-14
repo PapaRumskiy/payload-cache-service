@@ -3,6 +3,7 @@ import uuid
 import pytest
 
 from cache_service.service import PayloadService
+from cache_service.transformer import TransformerError
 from tests.fakes import (
     CountingTransformer,
     InMemoryPayloads,
@@ -101,3 +102,20 @@ async def test_requests_producing_the_same_output_share_the_id(
 
 async def test_unknown_payload_has_no_output(service: PayloadService) -> None:
     assert await service.get_output(uuid.uuid4()) is None
+
+
+async def test_failed_call_fails_the_request_but_keeps_finished_results(
+    cache: InMemoryTransformationCache,
+    payloads: InMemoryPayloads,
+) -> None:
+    transformer = CountingTransformer(fail_on={"b"})
+    service = PayloadService(cache, payloads, transformer)
+
+    with pytest.raises(TransformerError):
+        await service.create_payload(["a", "b"], ["c", "d"])
+    assert cache.results == {"a": "A", "c": "C", "d": "D"}
+    assert payloads.ids_by_output == {}
+
+    transformer.fail_on.clear()
+    await service.create_payload(["a", "b"], ["c", "d"])
+    assert transformer.calls == {"a": 1, "b": 2, "c": 1, "d": 1}
