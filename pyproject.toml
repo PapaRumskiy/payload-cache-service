@@ -5,9 +5,13 @@ description = "FastAPI service that builds payloads from transformed strings and
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "aiosqlite>=0.22.1",
+    "alembic>=1.20.0",
+    "asyncpg>=0.32.0",
     "fastapi>=0.143.1",
     "pydantic>=2.14.1",
     "pydantic-settings>=2.16.0",
+    "sqlalchemy[asyncio]>=2.1.4",
     "uvicorn[standard]>=0.54.0",
 ]
 
@@ -34,7 +38,7 @@ select = [
 [tool.mypy]
 strict = true
 plugins = ["pydantic.mypy"]
-files = ["src", "tests"]
+files = ["src", "tests", "migrations"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
