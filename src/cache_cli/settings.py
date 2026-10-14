@@ -63,7 +63,7 @@ def _request_json(value: str) -> str:
 
 
 class CliSettings(BaseSettings):
-    model_config = SettingsConfigDict(cli_kebab_case=True, cli_hide_none_type=True)
+    model_config = SettingsConfigDict(cli_hide_none_type=True)
 
     host: HttpUrl = Field(
         default=HttpUrl("http://localhost:8000"),
@@ -138,13 +138,11 @@ def _add_argument(parser: ArgumentParser, *names: str, **kwargs: Any) -> Any:
 
 def describe_errors(error: ValidationError) -> str:
     """Render validation errors as one line, naming flags instead of fields."""
-    flags = {
-        alias: f"-{alias}/--{field.validation_alias.choices[1]}"
-        for field in CliSettings.model_fields.values()
-        if isinstance(field.validation_alias, AliasChoices)
-        for alias in field.validation_alias.choices[:1]
-        if isinstance(alias, str)
-    }
+    flags = {}
+    for field in CliSettings.model_fields.values():
+        if isinstance(field.validation_alias, AliasChoices):
+            short, long = field.validation_alias.choices
+            flags[str(short)] = f"-{short}/--{long}"
     return "; ".join(_describe(detail, flags) for detail in error.errors())
 
 
