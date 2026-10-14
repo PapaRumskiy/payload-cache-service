@@ -157,6 +157,24 @@ async def test_invalid_body_is_rejected(
     assert transformer.total_calls == 0
 
 
+@pytest.mark.parametrize(
+    "string",
+    [pytest.param(r"a\u0000b", id="NUL"), pytest.param(r"\ud800", id="lone surrogate")],
+)
+async def test_strings_the_database_cannot_store_are_rejected(
+    client: httpx.AsyncClient, transformer: CountingTransformer, string: str
+) -> None:
+    # Sent as raw JSON: the escapes are only valid in their escaped form.
+    body = f'{{"list_1": ["{string}", "ok"], "list_2": ["b", "c"]}}'
+
+    response = await client.post(
+        "/payload", content=body, headers={"Content-Type": "application/json"}
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert transformer.total_calls == 0
+
+
 async def test_unknown_payload_is_not_found(client: httpx.AsyncClient) -> None:
     response = await client.get(f"/payload/{uuid.uuid4()}")
 

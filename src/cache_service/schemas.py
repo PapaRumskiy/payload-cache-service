@@ -3,7 +3,14 @@
 import uuid
 from typing import Annotated, Self
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 # Every distinct string may cost one call to the transformer service and one
 # bound parameter in the cache lookup, so the request size is capped to keep
@@ -11,7 +18,17 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 MAX_ITEMS = 1_000
 MAX_STRING_LENGTH = 1_000
 
-InputString = Annotated[str, StringConstraints(max_length=MAX_STRING_LENGTH)]
+
+def _without_nul(value: str) -> str:
+    # Postgres text columns cannot store NUL characters.
+    if "\x00" in value:
+        raise ValueError("must not contain NUL characters")
+    return value
+
+
+InputString = Annotated[
+    str, StringConstraints(max_length=MAX_STRING_LENGTH), AfterValidator(_without_nul)
+]
 InputList = Annotated[list[InputString], Field(min_length=1, max_length=MAX_ITEMS)]
 
 

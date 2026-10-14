@@ -5,9 +5,10 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from cache_service.api import router
+from cache_service.api import router, validation_error_handler
 from cache_service.caching import CachingTransformer
 from cache_service.config import Settings, get_settings
 from cache_service.repositories import PayloadRepository, TransformationRepository
@@ -52,6 +53,11 @@ def create_app(
         finally:
             await engine.dispose()
 
-    app = FastAPI(title="Payload cache service", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(
+        title="Payload cache service",
+        version="0.1.0",
+        lifespan=lifespan,
+        exception_handlers={RequestValidationError: validation_error_handler},
+    )
     app.include_router(router)
     return app

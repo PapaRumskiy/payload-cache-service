@@ -34,6 +34,8 @@ def test_rejects_lists_of_different_length() -> None:
             {"list_1": ["a" * (MAX_STRING_LENGTH + 1)], "list_2": ["b"]},
             id="string too long",
         ),
+        pytest.param({"list_1": ["a\x00b"], "list_2": ["c"]}, id="NUL character"),
+        pytest.param({"list_1": ["\ud800"], "list_2": ["c"]}, id="lone surrogate"),
     ],
 )
 def test_rejects_malformed_bodies(body: dict[str, object]) -> None:

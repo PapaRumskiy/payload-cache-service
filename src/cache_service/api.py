@@ -1,9 +1,13 @@
 """HTTP endpoints."""
 
+import json
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -86,3 +90,23 @@ async def health(request: Request) -> dict[str, str]:
             status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable"
         ) from exc
     return {"status": "ok"}
+
+
+class AsciiJSONResponse(JSONResponse):
+    def render(self, content: Any) -> bytes:
+        return json.dumps(content, separators=(",", ":")).encode("ascii")
+
+
+async def validation_error_handler(
+    request: Request, exc: RequestValidationError
+) -> AsciiJSONResponse:
+    """FastAPI's 422 response, with non-ASCII characters escaped.
+
+    The errors echo the rejected input, which may hold a lone surrogate (valid
+    as a JSON escape, invalid as text). Escaped, it is sent back as it came;
+    the default UTF-8 rendering would fail with a 500 instead.
+    """
+    return AsciiJSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        content={"detail": jsonable_encoder(exc.errors())},
+    )
