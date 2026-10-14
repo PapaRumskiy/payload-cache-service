@@ -1,7 +1,6 @@
 # Local deployment: Postgres, a one-off migration run, then the API.
 
 x-app: &app
-  build: .
   image: payload-cache-service
   environment:
     CACHE_SERVICE_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cache}:${POSTGRES_PASSWORD:-cache}@db:5432/${POSTGRES_DB:-cache}
@@ -22,8 +21,11 @@ services:
       retries: 15
 
   # Runs once and exits; the API starts only after the schema is up to date.
+  # It also builds the image both services use.
   migrate:
     <<: *app
+    build: .
+    pull_policy: build
     command: ["alembic", "upgrade", "head"]
     depends_on:
       db:
@@ -31,6 +33,13 @@ services:
 
   api:
     <<: *app
+    pull_policy: never
+    command:
+      - uvicorn
+      - cache_service.main:create_app
+      - --factory
+      - --host=0.0.0.0
+      - --port=8000
     ports:
       - "8000:8000"
     depends_on:

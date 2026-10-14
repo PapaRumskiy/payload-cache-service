@@ -29,9 +29,12 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY alembic.ini ./
 COPY migrations ./migrations
+# Writable home for the SQLite database used when no other one is configured.
+RUN mkdir data && chown app:app data
 
 ENV PATH="/app/.venv/bin:$PATH" \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    CACHE_SERVICE_DATABASE_URL=sqlite+aiosqlite:////app/data/cache.db
 
 USER app
 EXPOSE 8000
@@ -39,4 +42,6 @@ EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
 
-CMD ["uvicorn", "cache_service.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+# On its own the container brings its database up to date before serving.
+# compose.yaml runs the migrations as a separate step and starts only the API.
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn cache_service.main:create_app --factory --host 0.0.0.0 --port 8000"]
