@@ -4,9 +4,10 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from sqlalchemy import text
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
+from cache_service.models import Payload
 from cache_service.schemas import PayloadCreate, PayloadCreated, PayloadRead
 from cache_service.service import PayloadService
 from cache_service.transformer import TransformerError
@@ -75,11 +76,12 @@ async def read_payload(
 
 @router.get("/health")
 async def health(request: Request) -> dict[str, str]:
-    """Report whether the service can reach its database."""
+    """Report whether the database is reachable and migrated."""
     try:
         async with request.app.state.sessions() as session:
-            await session.execute(text("SELECT 1"))
-    except SQLAlchemyError as exc:
+            await session.execute(select(Payload.id).limit(1))
+    # asyncpg raises plain OSErrors, e.g. when the connection is refused.
+    except (SQLAlchemyError, OSError) as exc:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database unavailable"
         ) from exc

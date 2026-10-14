@@ -1,4 +1,5 @@
 import asyncio
+import socket
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -176,11 +177,32 @@ async def test_health_reports_ok(client: httpx.AsyncClient) -> None:
     assert response.json() == {"status": "ok"}
 
 
-async def test_health_reports_unreachable_database(tmp_path: Path) -> None:
-    missing_directory = tmp_path / "missing" / "cache.db"
-    settings = Settings(
-        _env_file=None, database_url=f"sqlite+aiosqlite:///{missing_directory}"
-    )
+def closed_port() -> int:
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        return int(listener.getsockname()[1])
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        pytest.param(
+            lambda tmp_path: f"sqlite+aiosqlite:///{tmp_path / 'missing' / 'x.db'}",
+            id="sqlite file cannot be opened",
+        ),
+        pytest.param(
+            lambda tmp_path: f"sqlite+aiosqlite:///{tmp_path / 'unmigrated.db'}",
+            id="schema missing",
+        ),
+        pytest.param(
+            lambda _: f"postgresql+asyncpg://user:pw@127.0.0.1:{closed_port()}/db",
+            id="postgres connection refused",
+        ),
+    ],
+)
+async def test_health_reports_unusable_database(
+    tmp_path: Path, database_url: Callable[[Path], str]
+) -> None:
+    settings = Settings(_env_file=None, database_url=database_url(tmp_path))
     app = create_app(settings, transformer=CountingTransformer())
 
     async with (
@@ -192,6 +214,7 @@ async def test_health_reports_unreachable_database(tmp_path: Path) -> None:
         response = await client.get("/health")
 
     assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert response.json() == {"detail": "Database unavailable"}
 
 
 async def test_transformer_failure_is_a_bad_gateway_and_retry_is_cheap(
