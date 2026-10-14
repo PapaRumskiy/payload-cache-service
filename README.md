@@ -3,7 +3,8 @@
 A FastAPI microservice that builds payloads from two lists of strings. Every
 string goes through a "transformer", which stands in for a slow external
 service. Its results are cached in a database, so each distinct string is sent
-to the transformer once, however many requests contain it.
+to the transformer once, however many requests contain it. (With several
+replicas that holds per replica; see the trade-offs.)
 
 The repository also contains `cache-cli`, a command line client for exercising
 the service.
@@ -148,7 +149,8 @@ a timeout, as a client of a real remote service would.
 If some calls fail, the results of the others are stored anyway and the
 request fails with `502`; a retry only repeats what failed. A request that is
 cancelled while waiting does not cancel the call either, and its result is
-still stored for the next request.
+still stored for the next request. On shutdown the service waits for such calls
+before it closes the database.
 
 ### Payload identity
 
