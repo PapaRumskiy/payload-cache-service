@@ -2,12 +2,12 @@ import uuid
 
 import pytest
 
+from cache_service.caching import CachingTransformer
 from cache_service.service import PayloadService
-from cache_service.transformer import TransformerError
 from tests.fakes import (
     CountingTransformer,
     InMemoryPayloads,
-    InMemoryTransformationCache,
+    InMemoryTransformationStore,
 )
 
 SPEC_LIST_1 = ["first string", "second string", "third string"]
@@ -20,22 +20,11 @@ def transformer() -> CountingTransformer:
 
 
 @pytest.fixture
-def cache() -> InMemoryTransformationCache:
-    return InMemoryTransformationCache()
-
-
-@pytest.fixture
-def payloads() -> InMemoryPayloads:
-    return InMemoryPayloads()
-
-
-@pytest.fixture
-def service(
-    cache: InMemoryTransformationCache,
-    payloads: InMemoryPayloads,
-    transformer: CountingTransformer,
-) -> PayloadService:
-    return PayloadService(cache, payloads, transformer)
+def service(transformer: CountingTransformer) -> PayloadService:
+    caching_transformer = CachingTransformer(
+        transformer, InMemoryTransformationStore(), timeout=1, max_concurrency=10
+    )
+    return PayloadService(caching_transformer, InMemoryPayloads())
 
 
 async def test_builds_the_spec_example(service: PayloadService) -> None:
@@ -52,12 +41,10 @@ async def test_repeated_request_reuses_id_without_calling_transformer(
     service: PayloadService, transformer: CountingTransformer
 ) -> None:
     first_id, _ = await service.create_payload(SPEC_LIST_1, SPEC_LIST_2)
-    calls_after_first = transformer.total_calls
-
     second_id, created = await service.create_payload(SPEC_LIST_1, SPEC_LIST_2)
 
     assert (second_id, created) == (first_id, False)
-    assert transformer.total_calls == calls_after_first == 6
+    assert transformer.total_calls == 6
 
 
 async def test_only_unseen_strings_are_transformed(
@@ -78,19 +65,6 @@ async def test_repeated_strings_in_one_request_are_transformed_once(
     assert await service.get_output(payload_id) == "A, B, A, A, B, A"
 
 
-async def test_cached_results_are_used_instead_of_calling_transformer(
-    payloads: InMemoryPayloads, transformer: CountingTransformer
-) -> None:
-    cache = InMemoryTransformationCache({"a": "from cache"})
-    service = PayloadService(cache, payloads, transformer)
-
-    payload_id, _ = await service.create_payload(["a"], ["b"])
-
-    assert await service.get_output(payload_id) == "from cache, B"
-    assert transformer.calls == {"b": 1}
-    assert cache.results == {"a": "from cache", "b": "B"}
-
-
 async def test_requests_producing_the_same_output_share_the_id(
     service: PayloadService,
 ) -> None:
@@ -102,20 +76,3 @@ async def test_requests_producing_the_same_output_share_the_id(
 
 async def test_unknown_payload_has_no_output(service: PayloadService) -> None:
     assert await service.get_output(uuid.uuid4()) is None
-
-
-async def test_failed_call_fails_the_request_but_keeps_finished_results(
-    cache: InMemoryTransformationCache,
-    payloads: InMemoryPayloads,
-) -> None:
-    transformer = CountingTransformer(fail_on={"b"})
-    service = PayloadService(cache, payloads, transformer)
-
-    with pytest.raises(TransformerError):
-        await service.create_payload(["a", "b"], ["c", "d"])
-    assert cache.results == {"a": "A", "c": "C", "d": "D"}
-    assert payloads.ids_by_output == {}
-
-    transformer.fail_on.clear()
-    await service.create_payload(["a", "b"], ["c", "d"])
-    assert transformer.calls == {"a": 1, "b": 2, "c": 1, "d": 1}

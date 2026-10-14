@@ -1,22 +1,12 @@
 """Payload generation."""
 
-import asyncio
-import logging
 import uuid
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Sequence
 from typing import Protocol
 
-from cache_service.transformer import Transformer
-
-logger = logging.getLogger(__name__)
+from cache_service.caching import CachingTransformer
 
 OUTPUT_SEPARATOR = ", "
-
-
-class TransformationStore(Protocol):
-    async def get_many(self, sources: Collection[str]) -> dict[str, str]: ...
-
-    async def save_many(self, results: Mapping[str, str]) -> None: ...
 
 
 class PayloadStore(Protocol):
@@ -41,17 +31,11 @@ def render_output(first: Sequence[str], second: Sequence[str]) -> str:
 
 
 class PayloadService:
-    """Builds payloads, calling the transformer only for strings it never saw."""
+    """Builds payloads from transformed strings and stores them by content."""
 
-    def __init__(
-        self,
-        cache: TransformationStore,
-        payloads: PayloadStore,
-        transformer: Transformer,
-    ) -> None:
-        self._cache = cache
-        self._payloads = payloads
+    def __init__(self, transformer: CachingTransformer, payloads: PayloadStore) -> None:
         self._transformer = transformer
+        self._payloads = payloads
 
     async def create_payload(
         self, list_1: Sequence[str], list_2: Sequence[str]
@@ -61,7 +45,8 @@ class PayloadService:
         Payloads are identified by their content, so a request that produces an
         already generated payload gets the existing id back.
         """
-        transformed = await self._transform({*list_1, *list_2})
+        # A set, so a string repeated within the request is transformed once.
+        transformed = await self._transformer.transform_many({*list_1, *list_2})
         output = render_output(
             [transformed[source] for source in list_1],
             [transformed[source] for source in list_2],
@@ -70,46 +55,3 @@ class PayloadService:
 
     async def get_output(self, payload_id: uuid.UUID) -> str | None:
         return await self._payloads.get_output(payload_id)
-
-    async def _transform(self, sources: set[str]) -> dict[str, str]:
-        """Map every source to its transformed value.
-
-        Taking a set means a string repeated within the request is transformed
-        once; the cache covers strings seen in earlier requests.
-        """
-        cached = await self._cache.get_many(sources)
-        missing = [source for source in sources if source not in cached]
-        fresh = await self._call_transformer(missing) if missing else {}
-        logger.info(
-            "Transformed %d distinct strings: %d from cache, %d computed",
-            len(sources),
-            len(cached),
-            len(fresh),
-        )
-        return cached | fresh
-
-    async def _call_transformer(self, sources: Sequence[str]) -> dict[str, str]:
-        """Transform cache misses concurrently and cache the results.
-
-        Results of the calls that succeeded are cached even if others failed:
-        they are already paid for, and a retry only repeats the failed calls.
-
-        Raises:
-            TransformerError: if any call failed.
-        """
-        outcomes = await asyncio.gather(
-            *map(self._transformer, sources), return_exceptions=True
-        )
-        fresh = {
-            source: outcome
-            for source, outcome in zip(sources, outcomes, strict=True)
-            if isinstance(outcome, str)
-        }
-        await self._cache.save_many(fresh)
-        errors = [outcome for outcome in outcomes if isinstance(outcome, BaseException)]
-        if errors:
-            logger.warning(
-                "%d of %d transformer calls failed", len(errors), len(sources)
-            )
-            raise errors[0]
-        return fresh

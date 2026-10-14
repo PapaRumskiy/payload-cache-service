@@ -3,12 +3,12 @@
 Every method runs in its own short transaction instead of one per request: the
 service must not hold a database connection while it waits for the transformer,
 and a stored result should be visible to concurrent requests (and to other
-replicas) as soon as possible.
+replicas) right away.
 """
 
 import hashlib
 import uuid
-from collections.abc import Collection, Mapping
+from collections.abc import Collection
 
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql, sqlite
@@ -21,24 +21,24 @@ def content_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def insert_ignoring_conflicts(
-    session: AsyncSession, model: type[Base]
+def insert_unless_exists(
+    session: AsyncSession, model: type[Base], key: str
 ) -> postgresql.Insert | sqlite.Insert:
-    """Start an ``INSERT ... ON CONFLICT DO NOTHING`` for the session's database.
+    """``INSERT ... ON CONFLICT (key) DO NOTHING`` for the session's database.
 
     Two requests may store the same row at the same moment; letting the
     database settle that race is simpler and safer than locking around it.
     """
     match dialect := session.get_bind().dialect.name:
         case "postgresql":
-            return postgresql.insert(model)
+            return postgresql.insert(model).on_conflict_do_nothing(index_elements=[key])
         case "sqlite":
-            return sqlite.insert(model)
+            return sqlite.insert(model).on_conflict_do_nothing(index_elements=[key])
         case _:
             raise NotImplementedError(f"unsupported database: {dialect}")
 
 
-class TransformationCache:
+class TransformationRepository:
     """Transformer results, looked up by input string."""
 
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
@@ -57,24 +57,13 @@ class TransformationCache:
             )
             return {sources_by_hash[hash_]: result for hash_, result in rows}
 
-    async def save_many(self, results: Mapping[str, str]) -> None:
-        """Store transformer results; sources cached in the meantime are kept."""
-        if not results:
-            return
+    async def save(self, source: str, result: str) -> None:
+        """Store a result; if the source is cached already, keep that one."""
         async with self._sessions.begin() as session:
             await session.execute(
-                insert_ignoring_conflicts(session, CachedTransformation)
-                .values(
-                    [
-                        {
-                            "source_hash": content_hash(source),
-                            "source": source,
-                            "result": result,
-                        }
-                        for source, result in results.items()
-                    ]
-                )
-                .on_conflict_do_nothing(index_elements=["source_hash"])
+                insert_unless_exists(
+                    session, CachedTransformation, "source_hash"
+                ).values(source_hash=content_hash(source), source=source, result=result)
             )
 
 
@@ -92,9 +81,8 @@ class PayloadRepository:
         digest = content_hash(output)
         async with self._sessions.begin() as session:
             created_id = await session.scalar(
-                insert_ignoring_conflicts(session, Payload)
-                .values(id=uuid.uuid4(), content_hash=digest, output=output)
-                .on_conflict_do_nothing(index_elements=["content_hash"])
+                insert_unless_exists(session, Payload, "content_hash")
+                .values(content_hash=digest, output=output)
                 .returning(Payload.id)
             )
             if created_id is not None:

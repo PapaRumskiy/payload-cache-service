@@ -3,14 +3,15 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from cache_service.repositories import PayloadRepository, TransformationCache
+from cache_service.repositories import PayloadRepository, TransformationRepository
 
 
 async def test_cache_returns_only_stored_results(
     sessions: async_sessionmaker[AsyncSession],
 ) -> None:
-    cache = TransformationCache(sessions)
-    await cache.save_many({"a": "A", "b": "B"})
+    cache = TransformationRepository(sessions)
+    await cache.save("a", "A")
+    await cache.save("b", "B")
 
     assert await cache.get_many(["a", "b", "c"]) == {"a": "A", "b": "B"}
 
@@ -18,30 +19,41 @@ async def test_cache_returns_only_stored_results(
 async def test_cache_lookup_of_nothing_is_empty(
     sessions: async_sessionmaker[AsyncSession],
 ) -> None:
-    assert await TransformationCache(sessions).get_many([]) == {}
+    assert await TransformationRepository(sessions).get_many([]) == {}
 
 
 async def test_cache_keeps_the_first_result_for_a_source(
     sessions: async_sessionmaker[AsyncSession],
 ) -> None:
-    cache = TransformationCache(sessions)
-    await cache.save_many({"a": "A"})
-    await cache.save_many({"a": "changed", "b": "B"})
+    cache = TransformationRepository(sessions)
+    await cache.save("a", "A")
+    await cache.save("a", "changed")
 
-    assert await cache.get_many(["a", "b"]) == {"a": "A", "b": "B"}
+    assert await cache.get_many(["a"]) == {"a": "A"}
 
 
 async def test_cache_handles_long_and_non_ascii_sources(
     sessions: async_sessionmaker[AsyncSession],
 ) -> None:
-    cache = TransformationCache(sessions)
+    cache = TransformationRepository(sessions)
     long_source = "x" * 10_000
-    await cache.save_many({long_source: "long", "привіт ✓": "ПРИВІТ ✓"})
+    await cache.save(long_source, "long")
+    await cache.save("привіт ✓", "ПРИВІТ ✓")
 
     assert await cache.get_many([long_source, "привіт ✓"]) == {
         long_source: "long",
         "привіт ✓": "ПРИВІТ ✓",
     }
+
+
+async def test_concurrent_saves_of_one_source_keep_one_result(
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    cache = TransformationRepository(sessions)
+
+    await asyncio.gather(*(cache.save("a", f"A{index}") for index in range(8)))
+
+    assert (await cache.get_many(["a"]))["a"] in {f"A{index}" for index in range(8)}
 
 
 async def test_same_output_gets_the_same_payload_id(

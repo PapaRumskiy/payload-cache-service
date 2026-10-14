@@ -31,7 +31,7 @@ class CountingTransformer:
         return self.calls.total()
 
 
-class InMemoryTransformationCache:
+class InMemoryTransformationStore:
     def __init__(self, results: Mapping[str, str] | None = None) -> None:
         self.results = dict(results or {})
 
@@ -40,9 +40,8 @@ class InMemoryTransformationCache:
             source: self.results[source] for source in sources if source in self.results
         }
 
-    async def save_many(self, results: Mapping[str, str]) -> None:
-        for source, result in results.items():
-            self.results.setdefault(source, result)
+    async def save(self, source: str, result: str) -> None:
+        self.results.setdefault(source, result)
 
 
 class InMemoryPayloads:

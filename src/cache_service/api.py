@@ -7,7 +7,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
-from cache_service.repositories import PayloadRepository, TransformationCache
 from cache_service.schemas import PayloadCreate, PayloadCreated, PayloadRead
 from cache_service.service import PayloadService
 from cache_service.transformer import TransformerError
@@ -16,12 +15,8 @@ router = APIRouter()
 
 
 async def get_payload_service(request: Request) -> PayloadService:
-    sessions = request.app.state.sessions
-    return PayloadService(
-        TransformationCache(sessions),
-        PayloadRepository(sessions),
-        request.app.state.transformer,
-    )
+    service: PayloadService = request.app.state.payload_service
+    return service
 
 
 PayloadServiceDep = Annotated[PayloadService, Depends(get_payload_service)]
