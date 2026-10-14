@@ -1,12 +1,13 @@
 """Entry point of cache-cli."""
 
+import os
 import statistics
 import sys
 import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TextIO
+from typing import BinaryIO, TextIO
 
 import httpx
 from pydantic import BaseModel, ValidationError
@@ -35,7 +36,7 @@ class IterationResult(BaseModel):
 def main(argv: Sequence[str] | None = None) -> int:
     settings = parse_args(argv)
     try:
-        request = read_request(settings, sys.stdin)
+        request = read_request(settings, sys.stdin.buffer)
     except OSError as error:
         return fail(f"cannot read the request: {error}", EXIT_USAGE_ERROR)
     except ValidationError as error:
@@ -43,25 +44,31 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         with (
-            httpx.Client(base_url=str(settings.host), timeout=HTTP_TIMEOUT) as http,
             open_output(settings.output_file) as output,
+            httpx.Client(base_url=str(settings.host), timeout=HTTP_TIMEOUT) as http,
         ):
             results = run(CacheServiceClient(http), request, settings.repeat, output)
     except ServiceError as error:
         return fail(str(error), EXIT_SERVICE_ERROR)
+    except BrokenPipeError:
+        # Whoever reads the output stopped early, e.g. `| head`. Pointing stdout
+        # at devnull keeps the interpreter's final flush from failing as well.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return EXIT_OK
+    except OSError as error:
+        return fail(f"cannot write the results: {error}", EXIT_USAGE_ERROR)
 
     print(summarize(results), file=sys.stderr)
     return EXIT_OK
 
 
-def read_request(settings: CliSettings, stdin: TextIO) -> PayloadCreate:
-    """Load the request body from --json, --input FILE or stdin."""
+def read_request(settings: CliSettings, stdin: BinaryIO) -> PayloadCreate:
+    """Load the request body from --json, or from --input FILE or stdin."""
     if settings.json_body is not None:
-        raw = settings.json_body
-    elif settings.input_file is None or settings.input_file == STDIO:
-        raw = stdin.read()
-    else:
-        raw = Path(settings.input_file).read_text(encoding="utf-8")
+        return PayloadCreate.model_validate_json(settings.json_body)
+    source = settings.input_file or STDIO
+    # Read as bytes, so a file that is not UTF-8 is reported as invalid JSON.
+    raw = stdin.read() if source == STDIO else Path(source).read_bytes()
     return PayloadCreate.model_validate_json(raw)
 
 

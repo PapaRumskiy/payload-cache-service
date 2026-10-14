@@ -2,6 +2,8 @@ import asyncio
 import io
 import json
 import socket
+import subprocess
+import sys
 import threading
 import time
 from collections.abc import Iterator
@@ -113,7 +115,8 @@ def test_reads_the_request_from_stdin(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(REQUEST)))
+    stdin = io.TextIOWrapper(io.BytesIO(json.dumps(REQUEST).encode()))
+    monkeypatch.setattr("sys.stdin", stdin)
 
     status = main(["-h", server_url, "-i", "-"])
 
@@ -132,6 +135,55 @@ def test_invalid_request_file_is_a_usage_error(
 
     assert status == 2
     assert "invalid request: list_2: Field required" in capsys.readouterr().err
+
+
+def test_request_file_that_is_not_utf8_is_a_usage_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    request_file = tmp_path / "request.json"
+    request_file.write_bytes(b"\xff\xfe not json")
+
+    status = main(["-i", str(request_file)])
+
+    assert status == 2
+    assert "invalid request: Invalid JSON" in capsys.readouterr().err
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
+def test_unwritable_output_is_a_usage_error(
+    server_url: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    read_only = tmp_path / "read-only"
+    read_only.mkdir(mode=0o500)
+
+    status = main(
+        ["-h", server_url, "-j", json.dumps(REQUEST), "-o", str(read_only / "out")]
+    )
+
+    assert status == 2
+    assert "cannot write the results" in capsys.readouterr().err
+
+
+def test_reader_closing_the_pipe_early_is_not_an_error(server_url: str) -> None:
+    # Enough output to overflow the pipe buffer once the reader is gone.
+    request = {"list_1": ["x" * 500] * 10, "list_2": ["y" * 500] * 10}
+    command = [sys.executable, "-m", "cache_cli", "-h", server_url, "-r", "50"]
+    cli = subprocess.Popen(  # noqa: S603 - our own interpreter and arguments
+        [*command, "-j", json.dumps(request)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert cli.stdout is not None
+    assert cli.stderr is not None
+
+    first_line = cli.stdout.readline()
+    cli.stdout.close()
+    stderr = cli.stderr.read().decode()
+    cli.stderr.close()
+
+    assert cli.wait(timeout=30) == 0
+    assert json.loads(first_line)["iteration"] == 1
+    assert stderr == ""
 
 
 def test_service_failure_is_reported(

@@ -4,6 +4,7 @@ import uuid
 from typing import Any, NamedTuple
 
 import httpx
+from pydantic import BaseModel, ValidationError
 
 from cache_service.schemas import PayloadCreate, PayloadCreated, PayloadRead
 
@@ -23,12 +24,12 @@ class CacheServiceClient:
 
     def create_payload(self, request: PayloadCreate) -> CreateResult:
         response = self._send("POST", "/payload", json=request.model_dump())
-        body = PayloadCreated.model_validate_json(response.content)
+        body = self._parse(PayloadCreated, response)
         return CreateResult(body.id, response.status_code == httpx.codes.CREATED)
 
     def read_payload(self, payload_id: uuid.UUID) -> str:
         response = self._send("GET", f"/payload/{payload_id}")
-        return PayloadRead.model_validate_json(response.content).output
+        return self._parse(PayloadRead, response).output
 
     def _send(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         try:
@@ -42,3 +43,14 @@ class CacheServiceClient:
         except httpx.HTTPError as error:
             raise ServiceError(f"{method} {url} failed: {error}") from error
         return response
+
+    @staticmethod
+    def _parse[M: BaseModel](model: type[M], response: httpx.Response) -> M:
+        try:
+            return model.model_validate_json(response.content)
+        except ValidationError as error:
+            request = response.request
+            raise ServiceError(
+                f"{request.method} {request.url.path} returned an unexpected body: "
+                f"{response.text[:200]!r}"
+            ) from error
