@@ -199,6 +199,18 @@ def test_service_failure_is_reported(
     assert "POST /payload failed with status 502" in capsys.readouterr().err
 
 
+def test_json_request_does_not_need_stdin(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Python sets sys.stdin to None when the process starts with it closed.
+    monkeypatch.setattr("sys.stdin", None)
+
+    status = main(["-h", "http://127.0.0.1:9", "-j", json.dumps(REQUEST)])
+
+    assert status == 1
+    assert "POST /payload failed" in capsys.readouterr().err
+
+
 def test_unreachable_service_is_reported(capsys: pytest.CaptureFixture[str]) -> None:
     with socket.create_server(("127.0.0.1", 0)) as listener:
         port = listener.getsockname()[1]
