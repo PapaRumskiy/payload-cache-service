@@ -1,4 +1,5 @@
 import asyncio
+import json
 import socket
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -173,6 +174,34 @@ async def test_strings_the_database_cannot_store_are_rejected(
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert transformer.total_calls == 0
+
+
+def reject_constant(name: str) -> None:
+    raise AssertionError(f"not strict JSON: {name}")
+
+
+@pytest.mark.parametrize(
+    ("content", "content_type"),
+    [
+        pytest.param(b"\xff\xfe", "text/plain", id="invalid UTF-8 text"),
+        pytest.param(
+            b"list_1=\xff", "application/x-www-form-urlencoded", id="invalid UTF-8 form"
+        ),
+        pytest.param(b"\xff", None, id="no content type"),
+        pytest.param(
+            b'{"list_1": [NaN], "list_2": [Infinity]}', "application/json", id="NaN"
+        ),
+    ],
+)
+async def test_any_malformed_body_gets_a_strict_json_422(
+    client: httpx.AsyncClient, content: bytes, content_type: str | None
+) -> None:
+    headers = {"Content-Type": content_type} if content_type else {}
+
+    response = await client.post("/payload", content=content, headers=headers)
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    json.loads(response.content, parse_constant=reject_constant)
 
 
 async def test_unknown_payload_is_not_found(client: httpx.AsyncClient) -> None:

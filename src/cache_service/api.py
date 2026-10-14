@@ -1,6 +1,7 @@
 """HTTP endpoints."""
 
 import json
+import math
 import uuid
 from typing import Annotated, Any
 
@@ -92,21 +93,30 @@ async def health(request: Request) -> dict[str, str]:
     return {"status": "ok"}
 
 
-class AsciiJSONResponse(JSONResponse):
+class StrictJSONResponse(JSONResponse):
+    """JSON escaped to ASCII, without the non-standard NaN and Infinity."""
+
     def render(self, content: Any) -> bytes:
-        return json.dumps(content, separators=(",", ":")).encode("ascii")
+        return json.dumps(content, separators=(",", ":"), allow_nan=False).encode()
 
 
 async def validation_error_handler(
     request: Request, exc: RequestValidationError
-) -> AsciiJSONResponse:
-    """FastAPI's 422 response, with non-ASCII characters escaped.
+) -> StrictJSONResponse:
+    """FastAPI's 422 response, made safe for whatever the client sent.
 
-    The errors echo the rejected input, which may hold a lone surrogate (valid
-    as a JSON escape, invalid as text). Escaped, it is sent back as it came;
-    the default UTF-8 rendering would fail with a 500 instead.
+    The errors echo the rejected input, which can be bytes that are not UTF-8,
+    NaN, or a lone surrogate (valid as a JSON escape, invalid as text). The
+    default handler fails with a 500 on all three; here bytes are decoded
+    leniently, non-finite numbers become strings, and the JSON is ASCII.
     """
-    return AsciiJSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-        content={"detail": jsonable_encoder(exc.errors())},
+    errors = jsonable_encoder(
+        exc.errors(),
+        custom_encoder={
+            bytes: lambda raw: raw.decode("utf-8", "backslashreplace"),
+            float: lambda number: number if math.isfinite(number) else str(number),
+        },
+    )
+    return StrictJSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, content={"detail": errors}
     )
