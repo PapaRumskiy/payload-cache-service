@@ -3,7 +3,7 @@
 A FastAPI microservice that builds payloads from two lists of strings. Every
 string goes through a "transformer", which stands in for a slow external
 service. Its results are cached in a database, so each distinct string is sent
-to the transformer only once, no matter how many requests contain it.
+to the transformer once, however many requests contain it.
 
 The repository also contains `cache-cli`, a command line client for exercising
 the service.
@@ -34,6 +34,13 @@ the cache:
 
 Interactive API docs are served at <http://localhost:8000/docs>.
 
+The image also runs on its own. It then applies the migrations to a SQLite
+database inside the container before it starts serving:
+
+```bash
+docker build -t payload-cache-service . && docker run -p 8000:8000 payload-cache-service
+```
+
 ## API
 
 ### `POST /payload`
@@ -45,8 +52,9 @@ Interactive API docs are served at <http://localhost:8000/docs>.
 }
 ```
 
-Both lists must have the same length, contain 1 to 1000 strings, and each
-string can be up to 1000 characters long.
+Both lists must have the same length and contain 1 to 1000 strings. Each
+string can be up to 1000 characters long and must not contain NUL characters,
+which Postgres cannot store.
 
 | Status | Meaning |
 | --- | --- |
@@ -65,8 +73,8 @@ Returns the payload, `404` for an unknown id, `422` for a malformed one:
 
 ### `GET /health`
 
-`{"status": "ok"}` when the database is reachable, `503` otherwise. The Docker
-health check uses it.
+`{"status": "ok"}` when the database is reachable and migrated, `503`
+otherwise. The Docker health check uses it.
 
 ## cache-cli
 
@@ -86,7 +94,8 @@ usage: cache-cli [--help] [-h URL] [-r N] [-i FILE|-] [-j JSON] [-o FILE|-]
 Exactly one of `--input` and `--json` is required. Each iteration creates the
 payload and reads it back; the result is written as one JSON line, and a
 summary goes to stderr. The exit status is 0 on success, 1 when the service
-fails, and 2 on invalid arguments or input.
+fails or cannot be reached, and 2 on invalid arguments or input, including an
+output file that cannot be written.
 
 ```bash
 uv run cache-cli -i request.json -o results.jsonl
@@ -110,31 +119,36 @@ What happens on `POST /payload`:
 1. FastAPI validates the body against `PayloadCreate` (`schemas.py`).
 2. `PayloadService` (`service.py`) collects the distinct strings of both lists.
    A string that occurs several times in one request is transformed once.
-3. One query fetches the strings that are already cached (`TransformationCache`
-   in `repositories.py`).
-4. The transformer is called concurrently, only for the misses, and the new
-   results are stored.
-5. The transformed strings are interleaved and joined with `", "`.
-6. `PayloadRepository` returns the id of the payload with that content,
-   inserting it if it is new.
+3. `CachingTransformer` (`caching.py`) looks all of them up in one query and
+   calls the transformer, concurrently, only for the misses. Each result is
+   stored as soon as it arrives.
+4. The transformed strings are interleaved and joined with `", "`.
+5. `PayloadRepository` (`repositories.py`) returns the id of the payload with
+   that content, inserting it if it is new.
 
 `GET /payload/{id}` is a single primary key lookup.
 
 ### Keeping transformer calls to a minimum
 
-The `cached_transformations` table maps every input string to its result, so
-a string seen in any earlier request is never sent again. The table is keyed by
+The `cached_transformations` table maps every input string to its result, so a
+string seen in any earlier request is never sent again. The table is keyed by
 the SHA-256 of the input, which keeps the index small for long strings
 (Postgres rejects B-tree entries above ~2.7 kB). Within one request only the
 distinct strings are looked up and transformed.
 
-Two concurrent requests can still miss the cache for the same string at the
-same moment. `CoalescingTransformer` (`transformer.py`) makes them share one
-in-flight call. It also caps the number of parallel calls and puts a timeout on
-each one, as a client of a real remote service would.
+Concurrent requests need more care, because two of them can miss the cache for
+the same string at the same moment. In `CachingTransformer`, a miss is resolved
+by a single task that checks the cache once more, calls the transformer and
+stores the result. Every request that misses the same string while that task
+runs waits for it instead of calling the transformer again. The task is only
+released after the result is committed, so a string is always either in flight
+or cached. The same class caps the number of parallel calls and gives each call
+a timeout, as a client of a real remote service would.
 
-If some calls fail, the results of the successful ones are cached before the
-request fails with `502`, so a retry only repeats what failed.
+If some calls fail, the results of the others are stored anyway and the
+request fails with `502`; a retry only repeats what failed. A request that is
+cancelled while waiting does not cancel the call either, and its result is
+still stored for the next request.
 
 ### Payload identity
 
@@ -159,9 +173,11 @@ transaction rather than one per request, for two reasons:
 - a cached result becomes visible to concurrent requests, and to other
   replicas, as soon as it is stored.
 
-All writes are `INSERT … ON CONFLICT DO NOTHING`. When two requests store the
-same string or payload at the same moment, the database settles it, and nobody
-fails on a unique constraint.
+All writes are single-row `INSERT … ON CONFLICT DO NOTHING` statements. When
+two requests, or two replicas, store the same string or payload at the same
+moment, the database settles it and neither fails on a unique constraint.
+Writing one row per statement also rules out deadlocks between transactions
+that insert the same rows in a different order.
 
 ## Configuration
 
@@ -170,7 +186,7 @@ The service reads `CACHE_SERVICE_*` environment variables, or a `.env` file:
 | Variable | Default | |
 | --- | --- | --- |
 | `CACHE_SERVICE_DATABASE_URL` | `sqlite+aiosqlite:///./cache.db` | SQLAlchemy URL; compose sets a Postgres one. |
-| `CACHE_SERVICE_LOG_LEVEL` | `INFO` | |
+| `CACHE_SERVICE_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL`, in any case. |
 | `CACHE_SERVICE_TRANSFORMER_LATENCY` | `0.1` | Simulated delay of the transformer, in seconds. |
 | `CACHE_SERVICE_TRANSFORMER_TIMEOUT` | `5.0` | Timeout of one transformer call, in seconds. |
 | `CACHE_SERVICE_TRANSFORMER_MAX_CONCURRENCY` | `10` | Parallel transformer calls per process. |
@@ -204,8 +220,9 @@ src/cache_service/
   main.py           app factory and lifespan (engine, transformer)
   api.py            HTTP endpoints
   schemas.py        request and response models
-  service.py        payload generation: cache lookup, transformer calls, interleaving
-  transformer.py    transformer protocol, simulated service, call coalescing
+  service.py        payload generation and interleaving
+  caching.py        transformer calls through the cache, at most one per string
+  transformer.py    transformer protocol and the simulated service
   repositories.py   database access
   models.py         tables
   config.py         settings
@@ -214,25 +231,27 @@ src/cache_cli/
   client.py         HTTP client
   main.py           entry point
 migrations/         Alembic
-tests/unit/         no I/O: schemas, interleaving, service with in-memory fakes, coalescing, CLI parsing
+tests/unit/         no I/O: schemas, caching, service, CLI parsing and HTTP client
 tests/integration/  real database and HTTP: repositories, API, migrations, CLI against a live server
 ```
 
 ## Tests
 
-Unit tests run without I/O. The service is tested with in-memory fakes of its
-stores and a transformer that counts its calls, which is how the "minimize
-calls" requirement is checked directly. The coalescing tests control exactly
-when fake calls finish, so they test concurrency without relying on timing.
+Unit tests run without I/O. `CachingTransformer` and the service are tested
+with an in-memory store and a transformer that counts its calls, which is how
+the "minimize calls" requirement is checked directly. The concurrency tests
+control exactly when fake calls and writes finish, so they do not depend on
+timing. The CLI's HTTP client is tested against `httpx.MockTransport`.
 
 Integration tests use a real database (a temporary SQLite file, or Postgres in
 CI):
 
 - the repositories, including concurrent inserts of the same payload;
 - the API through the ASGI stack, including concurrent requests, a restart
-  with a warm cache, and transformer failures;
+  with a warm cache, transformer failures and an unusable database;
 - the migrations, compared against the models, so the two cannot drift apart;
-- `cache-cli`, run against the service served by uvicorn on a local port.
+- `cache-cli`, run against the service served by uvicorn on a local port,
+  including its error paths.
 
 ## Trade-offs and shortcuts
 
@@ -242,10 +261,13 @@ CI):
 - The cache never expires, because the transformer is assumed to be
   deterministic. If its behaviour could change, its version should become part
   of the cache key.
-- Coalescing works within one process. Separate replicas may each call the
-  transformer once for a string they all miss at the same moment. The cache
-  writes are idempotent, so this costs an extra call and nothing more. Avoiding
-  it would take a distributed lock, which is not worth it here.
+- Sharing in-flight calls works within one process. Replicas that miss the
+  same string at the same moment may each call the transformer once; the
+  second result is discarded when it is stored. Avoiding that would take a
+  distributed lock, which is not worth it here.
+- The cap on parallel transformer calls is shared by all requests, so a
+  request with many new strings delays the ones queued behind it. Giving each
+  request a fair share of the calls would fix that, at the cost of a scheduler.
 - The request limits are arbitrary. 1000 strings per list and 1000 characters
   per string keep the worst-case cost of one request bounded. In a real service
   they would come from the product requirements.
@@ -254,7 +276,8 @@ CI):
 - The CLI shares the request schema with the service. It rejects a bad
   request before sending it, which also means it cannot be used to send invalid
   requests; the integration tests cover server-side validation.
-- Migrations run in a separate one-off container before the API starts.
-  With several replicas this belongs in the deployment pipeline rather than in
-  container start-up.
+- Compose runs the migrations in a separate one-off container before the API
+  starts. With several replicas that step belongs in the deployment pipeline;
+  migrating on start, as the standalone image does, is only safe for a single
+  instance.
 - There is no authentication or rate limiting; both were out of scope.
