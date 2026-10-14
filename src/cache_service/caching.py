@@ -63,7 +63,7 @@ class CachingTransformer:
         errors = [outcome for outcome in outcomes if isinstance(outcome, BaseException)]
         if errors:
             logger.warning(
-                "%d of %d transformer calls failed, first error: %r",
+                "%d of %d strings could not be transformed, first error: %r",
                 len(errors),
                 len(missing),
                 errors[0],
@@ -106,5 +106,7 @@ class CachingTransformer:
                 raise TransformerError(
                     f"transformer did not answer within {self._timeout}s"
                 ) from exc
-            await self._store.save(source, result)
-            return result
+        # The slot only limits calls to the transformer; the write does not
+        # need to hold it.
+        await self._store.save(source, result)
+        return result
