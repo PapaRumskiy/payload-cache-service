@@ -194,6 +194,22 @@ async def test_cancelled_request_still_stores_the_result() -> None:
     assert transformer.calls == ["a"]
 
 
+async def test_drain_waits_for_calls_nobody_waits_for_any_more() -> None:
+    store = InMemoryTransformationStore()
+    transformer = GatedTransformer()
+    cached = caching(transformer, store)
+
+    request = asyncio.create_task(cached.transform_many({"a"}))
+    await transformer.wait_until_in_flight(1)
+    request.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await request
+    transformer.release.set()
+    await cached.drain()
+
+    assert store.results == {"a": "A"}
+
+
 async def test_parallel_calls_are_capped() -> None:
     transformer = GatedTransformer()
     cached = caching(transformer, max_concurrency=2)

@@ -51,6 +51,7 @@ def create_app(
         try:
             yield
         finally:
+            await caching_transformer.drain()
             await engine.dispose()
 
     app = FastAPI(

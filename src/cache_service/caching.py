@@ -83,6 +83,14 @@ class CachingTransformer:
         }
         return cached | resolved
 
+    async def drain(self) -> None:
+        """Wait for the calls still in flight, so their results get stored.
+
+        Called on shutdown: a call whose requests were all cancelled keeps
+        running, and the database must stay open until it has stored its result.
+        """
+        await asyncio.gather(*self._in_flight.values(), return_exceptions=True)
+
     async def _resolve(self, source: str) -> str:
         task = self._in_flight.get(source)
         if task is None:
