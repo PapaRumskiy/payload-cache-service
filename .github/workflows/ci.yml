@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint and type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - run: uv sync --locked
+      - run: uv run ruff check
+      - run: uv run ruff format --check
+      - run: uv run mypy
+
+  test:
+    name: Tests (${{ matrix.database }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, postgres]
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: cache
+          POSTGRES_PASSWORD: cache
+          POSTGRES_DB: cache_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cache -d cache_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    env:
+      # Empty for the SQLite run, which makes the tests use a temporary file.
+      TEST_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgresql+asyncpg://cache:cache@localhost:5432/cache_test' || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - run: uv sync --locked
+      - run: uv run pytest --cov --cov-report=term
+
+  end-to-end:
+    name: Docker end-to-end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - run: uv sync --locked --no-dev
+      - name: Start the stack
+        run: docker compose up --build --wait
+      - name: Run cache-cli against the service
+        run: |
+          uv run --no-dev cache-cli -h http://localhost:8000 -r 3 \
+            -j '{"list_1": ["first string", "second string", "third string"], "list_2": ["other string", "another string", "last string"]}' \
+            -o results.jsonl
+          cat results.jsonl
+          test "$(jq -sc '[.[].created]' results.jsonl)" = '[true,false,false]'
+          test "$(jq -sc '[.[].id] | unique | length' results.jsonl)" = '1'
+          test "$(jq -r '.output' results.jsonl | sort -u)" = \
+            'FIRST STRING, OTHER STRING, SECOND STRING, ANOTHER STRING, THIRD STRING, LAST STRING'
+      - name: Show service logs
+        if: failure()
+        run: docker compose logs
+      - name: Stop the stack
+        if: always()
+        run: docker compose down --volumes
